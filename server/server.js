@@ -50,6 +50,7 @@ io.on('connection', (socket) => {
 
   // Handle chat messages (supports rooms)
   socket.on('send_message', (messageData) => {
+    console.log(`send_message received from ${socket.id}:`, { room: messageData.room, msg: messageData.message?.slice?.(0,100) });
     const room = messageData.room || 'general';
     const message = {
       ...messageData,
@@ -69,6 +70,7 @@ io.on('connection', (socket) => {
 
     // Emit to room
     io.to(room).emit('receive_message', message);
+  console.log(`Emitted receive_message to room ${room} for message id ${message.id}`);
 
     // Update unread counts for members in the room (except sender)
     const members = rooms[room] || new Set();
