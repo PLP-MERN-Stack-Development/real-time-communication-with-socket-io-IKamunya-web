@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useSocket } from './socket/socket';
 import Sidebar from './components/Sidebar';
 import Chat from './components/Chat';
+import DiscordLayout from './components/DiscordLayout';
+import Header from './components/Header';
 
 function App() {
   const [username, setUsername] = useState('');
@@ -101,23 +103,21 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen bg-gray-900">
-      <Sidebar
-        rooms={['general', 'random', 'announcements']}
-        currentRoom={currentRoom}
-        switchRoom={setCurrentRoom}
-        users={users}
-        username={username}
-        unreadCounts={unreadCounts}
-        onPrivateMessage={handlePrivateMessage}
-      />
-      <div className="flex-1">
-        <Chat
-          username={username}
-          room={currentRoom}
-        />
+    <DiscordLayout
+      rooms={['general', 'random', 'announcements']}
+      currentRoom={currentRoom}
+      switchRoom={setCurrentRoom}
+      users={users}
+      username={username}
+      onPrivateMessage={handlePrivateMessage}
+    >
+      <div className="flex flex-col h-full">
+        <Header room={currentRoom} usersCount={users.length} />
+        <div className="flex-1 overflow-hidden">
+          <Chat username={username} room={currentRoom} />
+        </div>
       </div>
-    </div>
+    </DiscordLayout>
   );
 }
 

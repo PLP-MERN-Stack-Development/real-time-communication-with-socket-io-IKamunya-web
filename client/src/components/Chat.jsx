@@ -67,7 +67,7 @@ const Chat = ({ username, room }) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-700">
+    <div className="flex flex-col h-full bg-discord-gray-950">
       {/* Top bar */}
       <div className="flex items-center justify-between p-4 bg-gray-800 shadow-lg">
         <div className="flex items-center gap-2">
@@ -86,8 +86,8 @@ const Chat = ({ username, room }) => {
         </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+  {/* Messages */}
+  <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-700">
         {messages.map((msg) => (
           <div
             key={msg.id}
