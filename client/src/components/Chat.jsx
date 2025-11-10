@@ -6,13 +6,15 @@ const Chat = ({ username, room }) => {
   const {
     messages,
     sendMessage,
+    sendFile,
+    reactMessage,
+    markRead,
     sendPrivateMessage,
     typingUsers,
     users,
     socket,
     setTyping,
-    readMessages = {},
-    messageReactions = {},
+    unreadCounts
   } = useSocket();
 
   const [input, setInput] = useState('');
@@ -24,6 +26,18 @@ const Chat = ({ username, room }) => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // mark messages as read for this room when they arrive
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+    messages.forEach((m) => {
+      if (!m.isPrivate && m.room === room && m.sender !== username) {
+        if (!m.readBy || !m.readBy.includes(username)) {
+          if (markRead) markRead({ messageId: m.id });
+        }
+      }
+    });
+  }, [messages, room, username, markRead]);
 
   // Handle typing
   const handleTyping = (e) => {
@@ -38,11 +52,16 @@ const Chat = ({ username, room }) => {
     if (file) {
       const reader = new FileReader();
       reader.onload = () => {
-        socket.emit('send_file', {
-          fileData: reader.result,
-          fileName: file.name,
-          fileType: file.type,
-        });
+        if (sendFile) {
+          sendFile({ fileData: reader.result, fileName: file.name, fileType: file.type, room });
+        } else {
+          socket.emit('send_file', {
+            fileData: reader.result,
+            fileName: file.name,
+            fileType: file.type,
+            room,
+          });
+        }
       };
       reader.readAsDataURL(file);
       setFile(null);
@@ -63,7 +82,8 @@ const Chat = ({ username, room }) => {
 
   // React to message
   const reactToMessage = (msgId, emoji) => {
-    socket.emit('react_message', { messageId: msgId, emoji });
+    if (reactMessage) reactMessage({ messageId: msgId, emoji });
+    else socket.emit('react_message', { messageId: msgId, emoji });
   };
 
   return (
@@ -88,88 +108,76 @@ const Chat = ({ username, room }) => {
 
   {/* Messages */}
   <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-700">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.sender === username ? 'justify-end' : 'justify-start'}`}
-          >
-            <div className={`max-w-[70%] group ${
-              msg.sender === username ? 'order-1' : ''
-            }`}>
-              {/* Message header */}
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`font-medium ${
-                  msg.sender === username ? 'text-blue-400' : 'text-green-400'
-                }`}>
-                  {msg.sender}
-                </span>
-                <span className="text-xs text-gray-500">
-                  {new Date(msg.timestamp).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </span>
-              </div>
-
-              {/* Message content */}
-              <div className={`p-3 rounded-lg ${
-                msg.sender === username
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-800 text-gray-100'
-              }`}>
-                {msg.isFile ? (
-                  msg.fileType?.startsWith('image') ? (
-                    <img
-                      src={msg.fileData}
-                      alt={msg.fileName}
-                      className="rounded-md max-w-full"
-                    />
-                  ) : (
-                    <a
-                      href={msg.fileData}
-                      download={msg.fileName}
-                      className="flex items-center gap-2 text-blue-300 hover:text-blue-200"
-                    >
-                      <Paperclip size={16} />
-                      {msg.fileName}
-                    </a>
-                  )
-                ) : (
-                  <p className="whitespace-pre-wrap">{msg.message}</p>
+        {messages
+          .filter((m) => m.room === room || m.isPrivate)
+          .map((msg) => {
+            const isOwn = msg.sender === username;
+            const reactions = msg.reactions || {};
+            return (
+              <div key={msg.id} className={`flex items-end gap-3 ${isOwn ? 'justify-end' : 'justify-start'}`}>
+                {/* avatar for other users */}
+                {!isOwn && (
+                  <div className="w-8 h-8 rounded-full bg-discord-gray-600 flex items-center justify-center text-sm font-semibold text-white">
+                    {msg.sender?.charAt(0)?.toUpperCase()}
+                  </div>
                 )}
 
-                {/* Reactions */}
-                <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  {['👍', '❤️', '😂', '😮', '😢'].map((emoji) => (
-                    <button
-                      key={emoji}
-                      onClick={() => reactToMessage(msg.id, emoji)}
-                      className={`text-xs p-1 rounded hover:bg-gray-700 transition-colors ${
-                        messageReactions[msg.id]?.[emoji]?.includes(username)
-                          ? 'bg-gray-700'
-                          : ''
-                      }`}
-                    >
-                      {emoji}
-                      {messageReactions[msg.id]?.[emoji]?.length > 0 && (
-                        <span className="ml-1 text-xs">
-                          {messageReactions[msg.id][emoji].length}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                <div className="flex flex-col max-w-[75%]">
+                  <div className={`px-4 py-2 rounded-lg shadow-sm message-bubble ${isOwn ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white ml-auto' : 'bg-discord-gray-800 text-discord-gray-100'}`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-sm font-medium truncate">
+                        {msg.sender}
+                      </div>
+                      <div className="text-xs text-discord-gray-400 ml-2">
+                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
 
-              {/* Read receipts */}
-              {readMessages[msg.id]?.length > 0 && (
-                <div className="text-xs text-gray-500 mt-1">
-                  Seen by {readMessages[msg.id].join(', ')}
+                    <div className="text-sm">
+                      {msg.isFile ? (
+                        msg.fileType?.startsWith('image') ? (
+                          <img src={msg.fileData} alt={msg.fileName} className="rounded-md max-w-full" />
+                        ) : (
+                          <a href={msg.fileData} download={msg.fileName} className="inline-flex items-center gap-2 text-blue-300 hover:underline">
+                            <Paperclip size={16} />
+                            <span>{msg.fileName}</span>
+                          </a>
+                        )
+                      ) : (
+                        <div className="whitespace-pre-wrap">{msg.message}</div>
+                      )}
+                    </div>
+
+                    {/* Reactions */}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {['👍', '❤️', '😂', '😮', '😢'].map((emoji) => {
+                        const usersReacted = reactions[emoji] || [];
+                        const reacted = usersReacted.includes(username);
+                        return (
+                          <button
+                            key={emoji}
+                            onClick={() => reactToMessage(msg.id, emoji)}
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs ${reacted ? 'bg-discord-gray-700' : 'bg-discord-gray-800 hover:bg-discord-gray-700'}`}
+                          >
+                            <span>{emoji}</span>
+                            {usersReacted.length > 0 && <span className="text-discord-gray-300">{usersReacted.length}</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Read receipts */}
+                  {msg.readBy && msg.readBy.length > 0 && (
+                    <div className="text-[11px] text-discord-gray-400 mt-1 truncate">Seen by: {msg.readBy.join(', ')}</div>
+                  )}
                 </div>
-              )}
-            </div>
-          </div>
-        ))}
+
+                {/* placeholder for alignment when own message */}
+                {isOwn && <div className="w-8" />}
+              </div>
+            );
+          })}
         <div ref={messagesEndRef} />
       </div>
 
