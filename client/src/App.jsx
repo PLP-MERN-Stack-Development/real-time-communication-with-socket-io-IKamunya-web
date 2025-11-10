@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSocket } from './socket/socket';
+import Sidebar from './components/Sidebar';
+import Chat from './components/Chat';
 
 function App() {
   const [username, setUsername] = useState('');
@@ -62,77 +64,58 @@ function App() {
     };
   }, [disconnect, typingTimeout]);
 
+  const [currentRoom, setCurrentRoom] = useState('general');
+  const [unreadCounts, setUnreadCounts] = useState({});
+
+  const handlePrivateMessage = (userId) => {
+    const targetUser = users.find(u => u.id === userId);
+    if (targetUser) {
+      // Implement private messaging logic here
+      console.log(`Opening private chat with ${targetUser.username}`);
+    }
+  };
+
   if (!isJoined) {
     return (
-      <div className="join-container">
-        <h1>Join Chat</h1>
-        <form onSubmit={handleJoin}>
-          <input
-            type="text"
-            placeholder="Enter your username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-          />
-          <button type="submit">Join</button>
-        </form>
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-md">
+          <h1 className="text-3xl font-bold text-white mb-6 text-center">Welcome to Chat</h1>
+          <form onSubmit={handleJoin} className="space-y-4">
+            <input
+              type="text"
+              placeholder="Enter your username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full p-3 bg-gray-700 text-white rounded-md placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              type="submit"
+              className="w-full py-3 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 transition-colors"
+            >
+              Join Chat
+            </button>
+          </form>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="chat-container">
-      <div className="chat-header">
-        <h2>Chat Room</h2>
-        <div className="connection-status">
-          {isConnected ? '🟢 Connected' : '🔴 Disconnected'}
-        </div>
-      </div>
-
-      <div className="chat-main">
-        <div className="users-list">
-          <h3>Online Users</h3>
-          <ul>
-            {users.map((user) => (
-              <li key={user.id}>{user.username}</li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="messages-container">
-          <div className="messages">
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`message ${
-                  msg.system ? 'system' :
-                  msg.senderId === socket.id ? 'sent' : 'received'
-                }`}
-              >
-                {!msg.system && <strong>{msg.sender}: </strong>}
-                {msg.message}
-                <span className="timestamp">
-                  {new Date(msg.timestamp).toLocaleTimeString()}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {typingUsers.length > 0 && (
-            <div className="typing-indicator">
-              {typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...
-            </div>
-          )}
-
-          <form onSubmit={handleSendMessage}>
-            <input
-              type="text"
-              placeholder="Type a message..."
-              value={message}
-              onChange={handleTyping}
-            />
-            <button type="submit">Send</button>
-          </form>
-        </div>
+    <div className="flex h-screen bg-gray-900">
+      <Sidebar
+        rooms={['general', 'random', 'announcements']}
+        currentRoom={currentRoom}
+        switchRoom={setCurrentRoom}
+        users={users}
+        username={username}
+        unreadCounts={unreadCounts}
+        onPrivateMessage={handlePrivateMessage}
+      />
+      <div className="flex-1">
+        <Chat
+          username={username}
+          room={currentRoom}
+        />
       </div>
     </div>
   );
