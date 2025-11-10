@@ -14,10 +14,6 @@ const DiscordLayout = ({ rooms, currentRoom, switchRoom, users, username, childr
     <main className="flex-1 bg-discord-gray-950 text-white flex flex-col">
       {children}
     </main>
-    <aside className="w-80 bg-discord-gray-900 border-l border-discord-gray-800 p-3 hidden md:block">
-      <h4 className="text-xs text-discord-gray-400 uppercase mb-2">About</h4>
-      <p className="text-sm text-discord-gray-300">A real-time chat application inspired by Discord UI</p>
-    </aside>
   </div>
 );
 
