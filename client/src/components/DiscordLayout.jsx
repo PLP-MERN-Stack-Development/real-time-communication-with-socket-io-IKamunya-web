@@ -3,7 +3,7 @@ import ChannelList from './ChannelList';
 import MembersList from './MembersList';
 
 const DiscordLayout = ({ rooms, currentRoom, switchRoom, users, username, children, onPrivateMessage }) => (
-  <div className="flex h-screen">
+  <div className="flex min-h-screen w-full">
     <aside className="w-72 bg-discord-gray-900 flex flex-col">
       <div className="p-3 border-b border-discord-gray-800">
         <h1 className="text-white text-lg font-bold">Workspace</h1>
