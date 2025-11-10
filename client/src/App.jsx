@@ -17,9 +17,12 @@ function App() {
     messages,
     users,
     typingUsers,
+    unreadCounts,
     connect,
     disconnect,
+    joinRoom,
     sendMessage,
+    sendFile,
     setTyping
   } = useSocket();
 
@@ -27,6 +30,8 @@ function App() {
     e.preventDefault();
     if (username.trim()) {
       connect(username);
+      // join default room
+      joinRoom('general');
       setIsJoined(true);
     }
   };
@@ -34,30 +39,11 @@ function App() {
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (message.trim()) {
-      sendMessage(message);
+      sendMessage({ message, room: currentRoom });
       setMessage('');
     }
   };
-
-  const handleTyping = (e) => {
-    setMessage(e.target.value);
-    
-    if (!isTyping) {
-      setIsTyping(true);
-      setTyping(true);
-    }
-
-    // Clear existing timeout
-    if (typingTimeout) clearTimeout(typingTimeout);
-
-    // Set new timeout
-    const timeout = setTimeout(() => {
-      setIsTyping(false);
-      setTyping(false);
-    }, 2000);
-    
-    setTypingTimeout(timeout);
-  };
+  // typing is handled inside Chat component now
 
   useEffect(() => {
     return () => {
@@ -67,7 +53,6 @@ function App() {
   }, [disconnect, typingTimeout]);
 
   const [currentRoom, setCurrentRoom] = useState('general');
-  const [unreadCounts, setUnreadCounts] = useState({});
 
   const handlePrivateMessage = (userId) => {
     const targetUser = users.find(u => u.id === userId);
@@ -75,6 +60,11 @@ function App() {
       // Implement private messaging logic here
       console.log(`Opening private chat with ${targetUser.username}`);
     }
+  };
+
+  const handleSwitchRoom = (room) => {
+    setCurrentRoom(room);
+    joinRoom(room);
   };
 
   if (!isJoined) {
@@ -106,7 +96,7 @@ function App() {
     <DiscordLayout
       rooms={['general', 'random', 'announcements']}
       currentRoom={currentRoom}
-      switchRoom={setCurrentRoom}
+      switchRoom={handleSwitchRoom}
       users={users}
       username={username}
       onPrivateMessage={handlePrivateMessage}

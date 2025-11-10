@@ -28,7 +28,7 @@ const Chat = ({ username, room }) => {
   // Handle typing
   const handleTyping = (e) => {
     setInput(e.target.value);
-    setTyping(e.target.value.length > 0);
+    setTyping({ room, isTyping: e.target.value.length > 0 });
   };
 
   // Send message
