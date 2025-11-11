@@ -14,8 +14,11 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
+  // During local development accept connections from any origin to avoid
+  // issues when the client is served from a different host/port.
+  // In production set an explicit origin or use environment variables.
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: true,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -48,9 +51,15 @@ io.on('connection', (socket) => {
     console.log(`${username} joined the chat`);
   });
 
-  // Handle chat messages (supports rooms)
+    // Handle chat messages (supports rooms)
   socket.on('send_message', (messageData) => {
-    console.log(`send_message received from ${socket.id}:`, { room: messageData.room, msg: messageData.message?.slice?.(0,100) });
+    console.log('\n=== MESSAGE FLOW START ===');
+    console.log('1. Message received from client:', {
+      socketId: socket.id,
+      room: messageData.room,
+      message: messageData.message?.slice?.(0,100),
+      user: users[socket.id]?.username
+    });
     const room = messageData.room || 'general';
     const message = {
       ...messageData,
@@ -62,15 +71,44 @@ io.on('connection', (socket) => {
       reactions: {},
       readBy: [],
     };
+    
+    console.log('2. Created message object:', {
+      id: message.id,
+      sender: message.sender,
+      room: message.room,
+      message: message.message?.slice?.(0,100),
+      fullMessage: message
+    });
 
     messages.push(message);
 
     // Keep history to a reasonable limit
     if (messages.length > 5000) messages.shift();
 
-    // Emit to room
-    io.to(room).emit('receive_message', message);
-  console.log(`Emitted receive_message to room ${room} for message id ${message.id}`);
+    console.log('3. Current room state:', {
+      room,
+      connectedSockets: Array.from(rooms[room] || []),
+      totalMessages: messages.length,
+      roomMessages: messages.filter(m => m.room === room).length
+    });
+
+    console.log('4. Broadcasting message to room:', {
+      room,
+      socketsInRoom: Array.from(io.sockets.adapter.rooms.get(room) || []),
+      messageId: message.id
+    });
+    
+    // Make sure socket is in the room before broadcasting
+    if (socket.rooms.has(room)) {
+      io.to(room).emit('receive_message', message);
+      console.log('5. Message broadcast complete');
+    } else {
+      console.log('5. ERROR: Socket not in room, joining now');
+      socket.join(room);
+      rooms[room] = rooms[room] || new Set();
+      rooms[room].add(socket.id);
+      io.to(room).emit('receive_message', message);
+    }
 
     // Update unread counts for members in the room (except sender)
     const members = rooms[room] || new Set();
@@ -103,15 +141,66 @@ io.on('connection', (socket) => {
   // Join a room
   socket.on('join_room', (room) => {
     room = room || 'general';
-    socket.join(room);
-    rooms[room] = rooms[room] || new Set();
-    rooms[room].add(socket.id);
-    unreadCounts[socket.id] = unreadCounts[socket.id] || {};
-    unreadCounts[socket.id][room] = 0;
-    // send last messages for the room
-    const last = messages.filter(m => m.room === room).slice(-100);
-    socket.emit('room_messages', { room, messages: last });
-    io.to(room).emit('room_users', { room, users: Array.from(rooms[room]).map(id => users[id]).filter(Boolean) });
+    console.log('DEBUG: Room join flow ----------------');
+    console.log('1. User joining room:', {
+      socketId: socket.id,
+      room,
+      username: users[socket.id]?.username
+    });
+    
+    try {
+      // Join the room
+      socket.join(room);
+      rooms[room] = rooms[room] || new Set();
+      rooms[room].add(socket.id);
+      unreadCounts[socket.id] = unreadCounts[socket.id] || {};
+      unreadCounts[socket.id][room] = 0;
+      
+      console.log('2. Room state after join:', {
+        room,
+        usersInRoom: Array.from(rooms[room]).length,
+        socketInRoom: socket.rooms.has(room)
+      });
+      
+      // Send last messages for the room
+      const last = messages.filter(m => m.room === room).slice(-100);
+      socket.emit('room_messages', { room, messages: last });
+      
+      // Send system message for user joining this room
+      const joinMessage = {
+        id: Date.now(),
+        system: true,
+        message: `${users[socket.id]?.username} joined the room`,
+        room,
+        timestamp: new Date().toISOString(),
+      };
+      messages.push(joinMessage);
+      io.to(room).emit('receive_message', joinMessage);
+      
+      // Notify room of updated user list
+      io.to(room).emit('room_users', { 
+        room, 
+        users: Array.from(rooms[room])
+          .map(id => users[id])
+          .filter(Boolean) 
+      });
+      
+      // Acknowledge successful join
+      socket.emit('room_joined', { 
+        room,
+        joinedAt: new Date().toISOString(),
+        usersInRoom: Array.from(rooms[room]).length
+      });
+      
+      console.log('3. Room join complete for:', room);
+      
+    } catch (error) {
+      console.error('ERROR joining room:', error);
+      socket.emit('room_join_error', { 
+        room,
+        error: 'Failed to join room'
+      });
+    }
   });
 
   // Handle private messages
@@ -120,6 +209,8 @@ io.on('connection', (socket) => {
       id: Date.now(),
       sender: users[socket.id]?.username || 'Anonymous',
       senderId: socket.id,
+      recipient: users[to]?.username || null,
+      recipientId: to,
       message,
       timestamp: new Date().toISOString(),
       isPrivate: true,
@@ -193,6 +284,23 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     if (users[socket.id]) {
       const { username } = users[socket.id];
+      
+      // Send system messages for each room the user is in
+      Object.entries(rooms).forEach(([room, socketIds]) => {
+        if (socketIds.has(socket.id)) {
+          const leaveMessage = {
+            id: Date.now() + Math.random() * 1000, // Ensure unique IDs
+            system: true,
+            message: `${username} left the room`,
+            room,
+            timestamp: new Date().toISOString(),
+          };
+          messages.push(leaveMessage);
+          io.to(room).emit('receive_message', leaveMessage);
+          socketIds.delete(socket.id);
+        }
+      });
+      
       io.emit('user_left', { username, id: socket.id });
       console.log(`${username} left the chat`);
     }

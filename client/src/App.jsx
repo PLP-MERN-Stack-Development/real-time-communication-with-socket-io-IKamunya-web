@@ -1,71 +1,114 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSocket } from './socket/socket';
-import Sidebar from './components/Sidebar';
-import Chat from './components/Chat';
 import DiscordLayout from './components/DiscordLayout';
 import Header from './components/Header';
-
+import Chat from './components/Chat';
+import PrivateChatModal from './components/PrivateChatModal';
+import ConversationsList from './components/ConversationsList';
 function App() {
+  // 1. State hooks - All state must be declared before any other hooks
   const [username, setUsername] = useState('');
-  const [message, setMessage] = useState('');
   const [isJoined, setIsJoined] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
-  const [typingTimeout, setTypingTimeout] = useState(null);
+  const [currentRoom, setCurrentRoom] = useState('general');
+  const [message, setMessage] = useState('');
+  const [selectedPrivateUser, setSelectedPrivateUser] = useState(null);
+  const [isPrivateChatOpen, setIsPrivateChatOpen] = useState(false);
   
+  // 2. Custom hooks - Must be called after state hooks
   const {
     isConnected,
-    messages,
     users,
-    typingUsers,
-    unreadCounts,
     connect,
     disconnect,
     joinRoom,
     sendMessage,
-    sendFile,
-    setTyping
+    sendPrivateMessage,
+    unreadCounts,
+    messages
   } = useSocket();
+  
+  // All useEffect hooks must be together after useState and custom hooks
 
-  const handleJoin = (e) => {
-    e.preventDefault();
-    if (username.trim()) {
-      connect(username);
-      // join default room
-      joinRoom('general');
-      setIsJoined(true);
-    }
-  };
-
-  const handleSendMessage = (e) => {
-    e.preventDefault();
-    if (message.trim()) {
-      sendMessage({ message, room: currentRoom });
-      setMessage('');
-    }
-  };
-  // typing is handled inside Chat component now
-
+  // Group all effects together
   useEffect(() => {
     return () => {
-      if (typingTimeout) clearTimeout(typingTimeout);
       disconnect();
     };
-  }, [disconnect, typingTimeout]);
+  }, [disconnect]);
 
-  const [currentRoom, setCurrentRoom] = useState('general');
+  useEffect(() => {
+    if (isConnected && isJoined && currentRoom) {
+      console.log('DEBUG: Managing room:', { currentRoom, isConnected, isJoined });
+      joinRoom(currentRoom);
+    }
+  }, [isConnected, isJoined, currentRoom, joinRoom]);
 
-  const handlePrivateMessage = (userId) => {
+  // Event handlers after effects
+  const handleJoin = useCallback((e) => {
+    e.preventDefault();
+    if (username.trim()) {
+      console.log('DEBUG: Connecting with username:', username);
+      connect(username);
+      setIsJoined(true);
+    }
+  }, [username, connect]);
+
+  const handleSendMessage = useCallback((e) => {
+    e.preventDefault();
+    if (message.trim()) {
+      console.log('Sending message:', { message, room: currentRoom });
+      sendMessage({ message: message.trim(), room: currentRoom });
+      setMessage('');
+    }
+  }, [message, currentRoom, sendMessage]);
+
+  const handlePrivateMessage = useCallback((userId) => {
     const targetUser = users.find(u => u.id === userId);
     if (targetUser) {
-      // Implement private messaging logic here
       console.log(`Opening private chat with ${targetUser.username}`);
+      setSelectedPrivateUser(targetUser);
+      setIsPrivateChatOpen(true);
     }
-  };
+  }, [users]);
 
-  const handleSwitchRoom = (room) => {
+  const handleSwitchRoom = useCallback((room) => {
     setCurrentRoom(room);
-    joinRoom(room);
-  };
+  }, []);
+
+  // Build conversations list from private messages
+  const conversations = useMemo(() => {
+    const convMap = new Map();
+    messages.forEach((msg) => {
+      if (msg.isPrivate) {
+        const otherUsername = msg.sender === username ? msg.recipient : msg.sender;
+        const otherUserId = msg.sender === username ? msg.recipientId : msg.senderId;
+        
+        if (!convMap.has(otherUserId)) {
+          const otherUser = users.find(u => u.id === otherUserId);
+          convMap.set(otherUserId, {
+            userId: otherUserId,
+            username: otherUsername,
+            lastMessage: msg,
+            unread: 0
+          });
+        } else {
+          convMap.get(otherUserId).lastMessage = msg;
+        }
+      }
+    });
+    
+    return Array.from(convMap.values()).sort((a, b) => 
+      new Date(b.lastMessage.timestamp) - new Date(a.lastMessage.timestamp)
+    );
+  }, [messages, username, users]);
+
+  const handleSelectConversation = useCallback((conv) => {
+    const user = users.find(u => u.id === conv.userId);
+    if (user) {
+      setSelectedPrivateUser(user);
+      setIsPrivateChatOpen(true);
+    }
+  }, [users]);
 
   if (!isJoined) {
     return (
@@ -93,21 +136,43 @@ function App() {
   }
 
   return (
-    <DiscordLayout
-      rooms={['general', 'random', 'announcements']}
-      currentRoom={currentRoom}
-      switchRoom={handleSwitchRoom}
-      users={users}
-      username={username}
-      onPrivateMessage={handlePrivateMessage}
-    >
-      <div className="flex flex-col h-full">
-        <Header room={currentRoom} usersCount={users.length} />
-        <div className="flex-1 overflow-hidden">
-          <Chat username={username} room={currentRoom} />
+    <>
+      <DiscordLayout
+        rooms={['general', 'random', 'announcements']}
+        currentRoom={currentRoom}
+        switchRoom={handleSwitchRoom}
+        users={users}
+        username={username}
+        unreadCounts={unreadCounts}
+        isConnected={isConnected}
+        onPrivateMessage={handlePrivateMessage}
+        conversations={conversations}
+        onSelectConversation={handleSelectConversation}
+      >
+        <div className="flex flex-col h-full">
+          <Header 
+            room={currentRoom} 
+            usersCount={users.length} 
+            isConnected={isConnected}
+            onSearch={() => {
+              // Chat component will handle showing search - just a callback
+            }}
+          />
+          <div className="flex-1 overflow-hidden">
+            <Chat username={username} room={currentRoom} />
+          </div>
         </div>
-      </div>
-    </DiscordLayout>
+      </DiscordLayout>
+
+      <PrivateChatModal
+        isOpen={isPrivateChatOpen}
+        onClose={() => setIsPrivateChatOpen(false)}
+        otherUser={selectedPrivateUser}
+        currentUsername={username}
+        messages={messages}
+        onSendMessage={sendPrivateMessage}
+      />
+    </>
   );
 }
 

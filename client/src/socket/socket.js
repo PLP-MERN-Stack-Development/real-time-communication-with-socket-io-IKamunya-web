@@ -12,6 +12,8 @@ export const socket = io(SOCKET_URL, {
   reconnection: true,
   reconnectionAttempts: 5,
   reconnectionDelay: 1000,
+  timeout: 10000,
+  transports: ['websocket', 'polling']
 });
 
 // Custom hook for using socket.io
@@ -22,18 +24,98 @@ export const useSocket = () => {
   const [users, setUsers] = useState([]);
   const [typingUsers, setTypingUsers] = useState([]);
   const [unreadCounts, setUnreadCounts] = useState({});
+  const [currentUsername, setCurrentUsername] = useState(null);
+
+  // Debug current state
+  useEffect(() => {
+    console.log('DEBUG: Socket Hook State:', {
+      isConnected,
+      lastMessage: lastMessage?.id,
+      messagesCount: messages.length,
+      usersCount: users.length,
+      socketId: socket?.id,
+      messages: messages // Log full messages for debugging
+    });
+  }, [isConnected, lastMessage, messages, users]);
 
   // Connect to socket server
-  const connect = (username) => {
-    socket.connect();
-    if (username) {
-      socket.emit('user_join', username);
+  const connect = async (username) => {
+    console.log('DEBUG: Connecting socket with username:', username);
+    setCurrentUsername(username || null);
+    // Request notification permission for Web Notifications API
+    try {
+      await requestNotificationPermission();
+    } catch (e) {
+      // ignore
     }
+    
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Connection timeout'));
+      }, 5000);
+
+      const handleConnect = () => {
+        console.log('DEBUG: Socket connected successfully');
+        clearTimeout(timeout);
+        if (username) {
+          socket.emit('user_join', username);
+        }
+        resolve();
+      };
+
+      const handleConnectError = (error) => {
+        console.error('DEBUG: Socket connection error:', error);
+        clearTimeout(timeout);
+        reject(error);
+      };
+
+      socket.once('connect', handleConnect);
+      socket.once('connect_error', handleConnectError);
+
+      socket.connect();
+    });
   };
 
   // Join a chat room
-  const joinRoom = (room) => {
-    socket.emit('join_room', room);
+  const joinRoom = async (room) => {
+    console.log('DEBUG: Attempting to join room:', room);
+    
+    // Wait for socket to be connected
+    if (!socket.connected) {
+      console.log('DEBUG: Socket not connected, waiting...');
+      await new Promise(resolve => {
+        const checkConnection = () => {
+          if (socket.connected) {
+            resolve();
+          } else {
+            setTimeout(checkConnection, 100);
+          }
+        };
+        checkConnection();
+      });
+    }
+    
+    return new Promise((resolve, reject) => {
+      // Set up a response handler
+      const responseTimeout = setTimeout(() => {
+        console.error('DEBUG: Room join response timeout for:', room);
+        reject(new Error('Room join timeout'));
+      }, 5000);
+      
+      const handleRoomJoined = (data) => {
+        if (data.room === room) {
+          console.log('DEBUG: Successfully joined room:', room);
+          clearTimeout(responseTimeout);
+          socket.off('room_joined', handleRoomJoined);
+          resolve(data);
+        }
+      };
+      
+      socket.on('room_joined', handleRoomJoined);
+      
+      // Join the room
+      socket.emit('join_room', room);
+    });
   };
 
   // Disconnect from socket server
@@ -42,11 +124,73 @@ export const useSocket = () => {
   };
 
   // Send a message
-  const sendMessage = ({ message, room }) => {
-    socket.emit('send_message', { message, room });
+  const sendMessage = async ({ message, room }) => {
+    // Optimistic local echo: append message locally immediately so the UI
+    // reflects the sent message without waiting for the server round-trip.
+    // This is the simplest way to make messages appear instantly in the UI.
+    try {
+      const localMessage = {
+        id: `local-${Date.now()}`,
+        message,
+        room,
+        sender: 'You',
+        senderId: socket.id || 'local',
+        timestamp: new Date().toISOString(),
+        pending: true,
+      };
+
+      // Append locally
+      setMessages((prev) => [...prev, localMessage]);
+
+      if (!socket.connected) {
+        console.log('DEBUG: Socket not connected, waiting before sending message...');
+        await new Promise((resolve) => {
+          const checkConnection = () => {
+            if (socket.connected) {
+              resolve();
+            } else {
+              setTimeout(checkConnection, 100);
+            }
+          };
+          checkConnection();
+        });
+      }
+
+      console.log('\n\nCLIENT: Sending message:', {
+        message: message?.slice?.(0, 100),
+        room,
+        socketConnected: socket.connected,
+        socketId: socket.id,
+      });
+
+      socket.emit('send_message', { message, room });
+    } catch (err) {
+      console.error('Error in sendMessage optimistic flow:', err);
+    }
   };
 
   const sendFile = ({ fileData, fileName, fileType, room }) => {
+    // Optimistic local echo for files
+    const localFileMessage = {
+      id: `local-file-${Date.now()}`,
+      message: `📎 ${fileName}`,
+      fileName,
+      fileData,
+      fileType,
+      room,
+      sender: 'You',
+      senderId: socket.id || 'local',
+      timestamp: new Date().toISOString(),
+      isFile: true,
+      pending: true,
+      reactions: {},
+      readBy: []
+    };
+
+    // Append locally
+    setMessages((prev) => [...prev, localFileMessage]);
+
+    // Send to server
     socket.emit('send_file', { fileData, fileName, fileType, room });
   };
 
@@ -59,7 +203,26 @@ export const useSocket = () => {
   };
 
   // Send a private message
-  const sendPrivateMessage = (to, message) => {
+  const sendPrivateMessage = async (to, message) => {
+    // Optimistic local echo for private messages
+    const localMessage = {
+      id: `local-pm-${Date.now()}`,
+      message,
+      isPrivate: true,
+      sender: currentUsername || 'You',
+      senderId: socket.id || 'local',
+      recipient: null,
+      recipientId: to,
+      timestamp: new Date().toISOString(),
+      pending: true,
+      reactions: {},
+      readBy: []
+    };
+
+    // Append locally
+    setMessages((prev) => [...prev, localMessage]);
+
+    // Send to server
     socket.emit('private_message', { to, message });
   };
 
@@ -129,10 +292,52 @@ export const useSocket = () => {
 
     // Message events
     const onReceiveMessage = (message) => {
+      console.log('\n=== MESSAGE RECEIVED ===');
+      console.log('1. Message data:', {
+        messageId: message.id,
+        sender: message.sender,
+        room: message.room,
+        content: message.message?.slice?.(0,100)
+      });
       setLastMessage(message);
-      setMessages((prev) => [...prev, message]);
+      
+      setMessages((prev) => {
+        // If server confirms a message that we previously added optimistically,
+        // replace the pending local message with the authoritative server message.
+        const pendingIndex = prev.findIndex(m => m.pending && m.message === message.message && m.room === message.room);
+        if (pendingIndex !== -1) {
+          const newArr = [...prev];
+          newArr[pendingIndex] = message; // replace local pending with server message
+          console.log('3. Replaced pending local message with server message:', message.id);
+          return newArr;
+        }
+
+        // Otherwise avoid exact-duplicate messages by id
+        if (prev.some(m => String(m.id) === String(message.id))) {
+          console.log('3. Message already exists, skipping:', message.id);
+          return prev;
+        }
+
+        console.log('2. Current messages state:', {
+          count: prev.length,
+          lastMessage: prev[prev.length - 1]?.id
+        });
+
+        const newMessages = [...prev, message];
+        console.log('3. Updated messages state:', {
+          previousCount: prev.length,
+          newCount: newMessages.length,
+          addedMessageId: message.id
+        });
+        return newMessages;
+      });
+
       // sound & web notification when not focused
-      playNotification(message);
+      // Don't notify for messages sent by current user
+      if (message.sender !== currentUsername) {
+        playNotification(message);
+      }
+      console.log('=== MESSAGE PROCESSING COMPLETE ===\n');
     };
 
     const onPrivateMessage = (message) => {
@@ -142,11 +347,23 @@ export const useSocket = () => {
     };
 
     const onRoomMessages = ({ room, messages: roomMessages }) => {
+      console.log('DEBUG: Received room_messages event:', {
+        room,
+        messageCount: roomMessages.length,
+        firstMessageId: roomMessages[0]?.id,
+        lastMessageId: roomMessages[roomMessages.length - 1]?.id
+      });
       // replace messages for room or append
       setMessages((prev) => {
         // remove messages for this room and append roomMessages
         const others = prev.filter(m => m.room !== room);
-        return [...others, ...roomMessages];
+        const newMessages = [...others, ...roomMessages];
+        console.log('DEBUG: Updated messages state:', {
+          previousCount: prev.length,
+          newCount: newMessages.length,
+          room
+        });
+        return newMessages;
       });
     };
 
@@ -160,29 +377,13 @@ export const useSocket = () => {
     };
 
     const onUserJoined = (user) => {
-      // You could add a system message here
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          system: true,
-          message: `${user.username} joined the chat`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+      // System messages for room joins are now handled by server
+      // This listener just updates the users list
     };
 
     const onUserLeft = (user) => {
-      // You could add a system message here
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          system: true,
-          message: `${user.username} left the chat`,
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+      // System messages for room leaves are now handled by server
+      // This listener just updates the users list
     };
 
     // Typing events

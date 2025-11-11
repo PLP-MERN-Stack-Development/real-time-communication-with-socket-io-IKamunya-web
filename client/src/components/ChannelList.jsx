@@ -1,7 +1,7 @@
 import React from 'react';
 import { Hash } from 'lucide-react';
 
-const ChannelList = ({ rooms, currentRoom, switchRoom }) => (
+const ChannelList = ({ rooms, currentRoom, switchRoom, unreadCounts = {} }) => (
   <div className="p-4">
     <h4 className="text-xs text-discord-gray-400 uppercase mb-3 tracking-wider">Channels</h4>
     <ul className="space-y-2">
@@ -17,6 +17,9 @@ const ChannelList = ({ rooms, currentRoom, switchRoom }) => (
           >
             <Hash size={16} />
             <span className="truncate">{r}</span>
+            {unreadCounts && unreadCounts[r] > 0 && (
+              <span className="ml-auto bg-amber-500 text-[#0b0c0d] text-xs px-2 py-0.5 rounded-md">{unreadCounts[r]}</span>
+            )}
           </button>
         </li>
       ))}

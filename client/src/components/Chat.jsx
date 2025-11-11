@@ -1,6 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from '../socket/socket';
-import { Send, Image, Smile, Paperclip } from 'lucide-react';
+import { Menu, Bell, Search } from 'lucide-react';
+import Message from './Message';
+import MessageInput from './MessageInput';
+import UsersList from './UsersList';
+import TypingIndicator from './TypingIndicator';
+import SearchBar from './SearchBar';
 
 const Chat = ({ username, room }) => {
   const {
@@ -9,27 +14,70 @@ const Chat = ({ username, room }) => {
     sendFile,
     reactMessage,
     markRead,
-    sendPrivateMessage,
     typingUsers,
     users,
     socket,
     setTyping,
-    unreadCounts
+    unreadCounts,
+    joinRoom,  // Added joinRoom to destructuring
+    sendPrivateMessage
   } = useSocket();
 
-  const [input, setInput] = useState('');
-  const [file, setFile] = useState(null);
-  const messagesEndRef = useRef(null);
-  const fileInputRef = useRef(null);
+  const [showUsers, setShowUsers] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchResults, setSearchResults] = useState(null);
+  const [displayedMessages, setDisplayedMessages] = useState([]);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [messagesPerPage] = useState(50);
+  const containerRef = useRef(null);
+  const endRef = useRef(null);
+  const scrollObserverRef = useRef(null);
 
-  // Scroll to bottom on new message
+  // Join room when component mounts or room changes
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    let mounted = true;
+    
+    const joinAndSetupRoom = async () => {
+      if (socket && room && mounted) {
+        try {
+          console.log('DEBUG: Joining room:', room);
+          await joinRoom(room);
+          console.log('DEBUG: Successfully joined and setup room:', room);
+        } catch (error) {
+          console.error('Failed to join room:', error);
+        }
+      }
+    };
+    
+    joinAndSetupRoom();
+    
+    // Re-join room on reconnection
+    const handleReconnect = () => {
+      console.log('DEBUG: Reconnected, rejoining room:', room);
+      joinAndSetupRoom();
+    };
+    
+    socket?.on('connect', handleReconnect);
+    
+    return () => {
+      mounted = false;
+      socket?.off('connect', handleReconnect);
+    };
+  }, [socket, room, joinRoom]);
 
-  // mark messages as read for this room when they arrive
+  // smooth scroll to bottom when messages change
   useEffect(() => {
-    if (!messages || messages.length === 0) return;
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [messages, room]);
+
+  // legacy fallback: mark messages in this room as read on change (keeps socket behaviour intact)
+  useEffect(() => {
+    if (!messages || !room) return;
+    console.log('CHAT: Messages updated:', {
+      totalMessages: messages.length,
+      roomMessages: messages.filter(m => m.room === room || m.isPrivate).length,
+      room
+    });
     messages.forEach((m) => {
       if (!m.isPrivate && m.room === room && m.sender !== username) {
         if (!m.readBy || !m.readBy.includes(username)) {
@@ -39,199 +87,147 @@ const Chat = ({ username, room }) => {
     });
   }, [messages, room, username, markRead]);
 
-  // Handle typing
-  const handleTyping = (e) => {
-    setInput(e.target.value);
-    setTyping({ room, isTyping: e.target.value.length > 0 });
-  };
+  // Filter messages for current room and include private messages for the current user
+  const roomMessages = (messages || []).filter((m) => 
+    m.room === room || 
+    (m.isPrivate && (m.sender === username || m.recipient === username))
+  );
 
-  // Send message
-  const handleSend = () => {
-    if (!input.trim() && !file) return;
+  // Update displayed messages based on search or pagination
+  useEffect(() => {
+    if (searchResults) {
+      setDisplayedMessages(searchResults);
+    } else {
+      // Show latest messagesPerPage messages or all if less than limit
+      const start = Math.max(0, roomMessages.length - messagesPerPage);
+      setDisplayedMessages(roomMessages.slice(start));
+    }
+  }, [roomMessages, searchResults, messagesPerPage]);
 
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (sendFile) {
-          sendFile({ fileData: reader.result, fileName: file.name, fileType: file.type, room });
-        } else {
-          socket.emit('send_file', {
-            fileData: reader.result,
-            fileName: file.name,
-            fileType: file.type,
-            room,
+  // Handle scroll up to load older messages
+  useEffect(() => {
+    if (!containerRef.current || searchResults) return;
+
+    const container = containerRef.current;
+    const handleScroll = () => {
+      if (container.scrollTop < 100 && !isLoadingOlder && roomMessages.length > displayedMessages.length) {
+        setIsLoadingOlder(true);
+        // Simulate loading delay
+        setTimeout(() => {
+          setDisplayedMessages((prev) => {
+            const newStart = Math.max(0, roomMessages.length - (prev.length + messagesPerPage));
+            return roomMessages.slice(newStart);
           });
-        }
-      };
-      reader.readAsDataURL(file);
-      setFile(null);
-    }
+          setIsLoadingOlder(false);
+        }, 300);
+      }
+    };
 
-    if (input.trim()) {
-      sendMessage({ message: input, room });
-      setInput('');
-    }
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
-  // React to message
-  const reactToMessage = (msgId, emoji) => {
-    if (reactMessage) reactMessage({ messageId: msgId, emoji });
-    else socket.emit('react_message', { messageId: msgId, emoji });
-  };
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [containerRef, isLoadingOlder, roomMessages, displayedMessages, messagesPerPage, searchResults]);
 
   return (
-    <div className="flex flex-col h-full bg-discord-gray-950">
-      {/* Top bar */}
-      <div className="flex items-center justify-between p-4 bg-gray-800 shadow-lg">
-        <div className="flex items-center gap-2">
-          <span className="text-gray-400">#</span>
-          <h2 className="font-semibold text-white">{room}</h2>
-        </div>
+    <div className="flex h-full w-full bg-[color:var(--discord-950)] text-gray-100">
+      {/* mobile top bar */}
+      <div className="w-full md:hidden flex items-center justify-between px-4 py-2 bg-[color:var(--discord-900)] border-b border-[#1f2328]">
         <div className="flex items-center gap-3">
-          {users.map((user) => (
-            <div key={user.id} className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${
-                user.id === socket.id ? 'bg-blue-500' : 'bg-green-500'
-              }`} />
-              <span className="text-sm text-gray-300">{user.username}</span>
-            </div>
-          ))}
+          <button onClick={() => setShowUsers((s) => !s)} className="p-2 rounded-md hover:bg-gray-800">
+            <Menu size={18} />
+          </button>
+          <div className="font-semibold">#{room}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowSearch(!showSearch)} className="p-2 rounded-md hover:bg-gray-800"><Search size={18} /></button>
+          <button className="p-2 rounded-md hover:bg-gray-800"><Bell size={18} /></button>
         </div>
       </div>
 
-  {/* Messages */}
-  <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-700">
-        {messages
-          .filter((m) => m.room === room || m.isPrivate)
-          .map((msg) => {
-            const isOwn = msg.sender === username;
-            const reactions = msg.reactions || {};
-            return (
-              <div key={msg.id} className={`flex items-end gap-3 ${isOwn ? 'justify-end' : 'justify-start'}`}>
-                {/* avatar for other users */}
-                {!isOwn && (
-                  <div className="w-8 h-8 rounded-full bg-discord-gray-600 flex items-center justify-center text-sm font-semibold text-white">
-                    {msg.sender?.charAt(0)?.toUpperCase()}
-                  </div>
-                )}
+      {/* Users sidebar (collapses on mobile) */}
+      <aside className={`hidden md:flex md:flex-col w-72 bg-[color:var(--discord-900)] border-r border-[#151618] ${showUsers ? 'block' : ''}`}>
+        <UsersList users={users} unreadCounts={unreadCounts} socketId={socket?.id} onPrivateMessage={(to, text) => {
+          // if text is provided, send immediately; otherwise prompt
+          if (text) return sendPrivateMessage(to, text);
+          const body = window.prompt('Send a private message:');
+          if (body && body.trim()) sendPrivateMessage(to, body.trim());
+        }} />
+      </aside>
 
-                <div className="flex flex-col max-w-[75%]">
-                  <div className={`px-4 py-2 rounded-lg shadow-sm message-bubble ${isOwn ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white ml-auto' : 'bg-discord-gray-800 text-discord-gray-100'}`}>
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="text-sm font-medium truncate">
-                        {msg.sender}
-                      </div>
-                      <div className="text-xs text-discord-gray-400 ml-2">
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </div>
-                    </div>
-
-                    <div className="text-sm">
-                      {msg.isFile ? (
-                        msg.fileType?.startsWith('image') ? (
-                          <img src={msg.fileData} alt={msg.fileName} className="rounded-md max-w-full" />
-                        ) : (
-                          <a href={msg.fileData} download={msg.fileName} className="inline-flex items-center gap-2 text-blue-300 hover:underline">
-                            <Paperclip size={16} />
-                            <span>{msg.fileName}</span>
-                          </a>
-                        )
-                      ) : (
-                        <div className="whitespace-pre-wrap">{msg.message}</div>
-                      )}
-                    </div>
-
-                    {/* Reactions */}
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {['👍', '❤️', '😂', '😮', '😢'].map((emoji) => {
-                        const usersReacted = reactions[emoji] || [];
-                        const reacted = usersReacted.includes(username);
-                        return (
-                          <button
-                            key={emoji}
-                            onClick={() => reactToMessage(msg.id, emoji)}
-                            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs ${reacted ? 'bg-discord-gray-700' : 'bg-discord-gray-800 hover:bg-discord-gray-700'}`}
-                          >
-                            <span>{emoji}</span>
-                            {usersReacted.length > 0 && <span className="text-discord-gray-300">{usersReacted.length}</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Read receipts */}
-                  {msg.readBy && msg.readBy.length > 0 && (
-                    <div className="text-[11px] text-discord-gray-400 mt-1 truncate">Seen by: {msg.readBy.join(', ')}</div>
-                  )}
-                </div>
-
-                {/* placeholder for alignment when own message */}
-                {isOwn && <div className="w-8" />}
-              </div>
-            );
-          })}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Typing indicator */}
-      {typingUsers.length > 0 && (
-        <div className="px-4 py-2 text-sm text-gray-400">
-          {typingUsers.join(', ')} {typingUsers.length > 1 ? 'are' : 'is'} typing...
-        </div>
-      )}
-
-      {/* Input area */}
-      <div className="p-4 bg-gray-800">
-        <div className="flex items-center gap-2 bg-gray-700 rounded-lg p-2">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="p-2 text-gray-400 hover:text-gray-200 rounded-full hover:bg-gray-600 transition-colors"
-          >
-            <Paperclip size={20} />
-          </button>
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={(e) => setFile(e.target.files?.[0])}
-            className="hidden"
+      <main className="flex-1 flex flex-col">
+        {/* Search bar */}
+        {showSearch && (
+          <SearchBar 
+            messages={roomMessages}
+            currentRoom={room}
+            currentUsername={username}
+            onSearch={(results) => setSearchResults(results)}
+            onClose={() => {
+              setShowSearch(false);
+              setSearchResults(null);
+            }}
           />
-          <textarea
-            rows="1"
-            value={input}
-            onChange={handleTyping}
-            onKeyDown={handleKeyPress}
-            placeholder={`Message #${room}`}
-            className="flex-1 bg-transparent text-white placeholder-gray-400 outline-none resize-none"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() && !file}
-            className="p-2 text-white rounded-full bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send size={20} />
-          </button>
-        </div>
-        {file && (
-          <div className="mt-2 p-2 bg-gray-700 rounded flex items-center gap-2">
-            <Paperclip size={16} className="text-gray-400" />
-            <span className="text-sm text-gray-300">{file.name}</span>
-            <button
-              onClick={() => setFile(null)}
-              className="ml-auto text-gray-400 hover:text-white"
-            >
-              ×
-            </button>
-          </div>
         )}
-      </div>
+
+        {/* header */}
+        <div className="hidden md:flex items-center justify-between px-6 py-4 border-b border-[#151618] bg-[color:var(--discord-900)]">
+          <div className="flex items-center gap-3">
+            <h3 className="text-lg font-semibold">#{room}</h3>
+            <div className="text-sm text-gray-400">Welcome, {username}</div>
+          </div>
+          <div className="text-sm text-gray-400">{users.length} online</div>
+        </div>
+
+        {/* messages container */}
+        <div ref={containerRef} className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-4 scrollbar-thin scrollbar-thumb-[#2b2f36]">
+          {isLoadingOlder && (
+            <div className="text-center text-gray-400 text-sm py-2">
+              Loading older messages...
+            </div>
+          )}
+
+          {displayedMessages.length === 0 && (
+            <div className="text-center text-gray-400 mt-20">No messages yet — say hi 👋</div>
+          )}
+
+          {displayedMessages.length > 0 && roomMessages.length > displayedMessages.length && (
+            <div className="text-center text-gray-500 text-xs py-2">
+              ⬆️ Scroll up to load more ({roomMessages.length - displayedMessages.length} older messages)
+            </div>
+          )}
+
+          {displayedMessages.map((msg) => (
+            <Message
+              key={msg.id}
+              msg={msg}
+              currentUser={username}
+              reactMessage={reactMessage}
+              markRead={markRead}
+            />
+          ))}
+
+          <div ref={endRef} />
+        </div>
+
+        <div className="px-4 py-3 border-t border-[#151618] bg-[color:var(--discord-900)]">
+          <TypingIndicator typingUsers={typingUsers} currentUser={username} />
+          <MessageInput
+            placeholder={`Message #${room}`}
+            onSend={(text) => sendMessage({ message: text, room })}
+            onFile={(fileData) => sendFile({ ...fileData, room })}
+            setTyping={(isTyping) => setTyping({ room, isTyping })}
+          />
+        </div>
+      </main>
+
+      {/* mobile sliding users panel */}
+      {showUsers && (
+        <div className="md:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setShowUsers(false)} />
+      )}
+      {showUsers && (
+        <aside className="md:hidden fixed z-50 left-0 top-0 bottom-0 w-72 bg-[color:var(--discord-900)] border-r border-[#151618]">
+          <UsersList users={users} unreadCounts={unreadCounts} socketId={socket?.id} onClose={() => setShowUsers(false)} />
+        </aside>
+      )}
     </div>
   );
 };
