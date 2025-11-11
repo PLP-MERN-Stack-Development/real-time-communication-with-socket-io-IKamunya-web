@@ -122,12 +122,10 @@ Default client port: 5173 (Vite) or 3000 depending on the template. Open the URL
 
 ## Screenshots
 
-```markdown
-![Login view](/client/public/screenshots/login.png)
+![Login view](client/public/screenshots/login.png)
 
-![Chat - room view](/client/public/screenshots/chat-room.png)
+![Chat - room view](client/public/screenshots/chat-room.png)
 
-```
 
 ## Features Implemented (detailed)
 
